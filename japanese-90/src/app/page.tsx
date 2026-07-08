@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Home, BookOpen, Type, Flame, Volume2, Send, Settings, RotateCcw, Check, X, ChevronLeft, ChevronRight, Globe } from "lucide-react";
+import { Home, BookOpen, Type, Flame, Volume2, Send, Settings, RotateCcw, Check, X, ChevronLeft, ChevronRight, Globe, Mic } from "lucide-react";
 import { LANGUAGES, DEFAULT_LANG, type Language, type Lesson, type Week, type Kana } from "@/lib/curriculum";
 
 /* ---------- palette: washi / sumi / indigo(藍) / vermilion(朱) ---------- */
@@ -12,7 +12,7 @@ const C = {
   vermilion: "#CB3A22", vermilionSoft: "#E0644E", matcha: "#6E7F5B", line: "#D9D3C4",
 };
 
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 const MILESTONES: Record<number, string> = {
   1: "Record a 30-second voice memo today — your Day 1 baseline.",
   30: "Record a 90-second self-intro, no script. Compare to Day 1.",
@@ -65,6 +65,21 @@ function jpInLine(line: string) {
   const m = (line || "").match(/[\u3040-\u30ff\u4e00-\u9faf\u3005\u3006\u30fc々〆ヶ、。！？]+/g);
   return m ? m.join("") : "";
 }
+
+/* ---------- speech recognition (voice input — checks WORDS heard, not accent quality) ---------- */
+type SR = { lang: string; interimResults: boolean; maxAlternatives: number; continuous: boolean; onresult: (e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void; onerror: () => void; onend: () => void; start: () => void; stop: () => void };
+function getRecognizer(lang: string): SR | null {
+  try {
+    const w = window as unknown as { SpeechRecognition?: new () => SR; webkitSpeechRecognition?: new () => SR };
+    const Ctor = w.SpeechRecognition || w.webkitSpeechRecognition;
+    if (!Ctor) return null;
+    const r = new Ctor();
+    r.lang = lang; r.interimResults = false; r.maxAlternatives = 5; r.continuous = false;
+    return r;
+  } catch { return null; }
+}
+const voiceSupported = typeof window !== "undefined" && !!((window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown }).SpeechRecognition || (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition);
+function normJP(s: string) { return (s || "").replace(/[\s、。!！?？「」・,.]/g, ""); }
 
 /* ---------- tiny synthesized SFX (no audio files) ---------- */
 let AC: AudioContext | null = null;
@@ -143,7 +158,7 @@ export default function App() {
         <TopBar L={L} onLang={() => setShowLang(true)} onSettings={() => setShowSettings(true)} />
         {tab === "today" && <Today L={L} day={day} streak={streak} progress={progress} start={start} onLearn={() => setTab("learn")} />}
         {tab === "learn" && <LearnTab L={L} currentDay={day} start={start} progress={progress} onComplete={completeDay} wordStats={wordStats} onAnswer={answerWord} />}
-        {tab === "kana" && L.kana && <KanaTrainer kanaSet={L.kana} ttsLang={L.ttsLang} kanaStats={kanaStats} saveKana={saveKana} />}
+        {tab === "kana" && L.kana && <KanaTrainer hira={L.kana} kata={L.katakana} ttsLang={L.ttsLang} kanaStats={kanaStats} saveKana={saveKana} />}
         <TabBar tab={tab} setTab={setTab} hasScript={L.hasScript} />
         {showLang && <LangSheet current={langCode} onPick={pickLang} onClose={() => setShowLang(false)} />}
         {showSettings && (
@@ -428,19 +443,58 @@ function LessonView({ L, lesson, week, viewDay, done, onComplete, wordStats, onA
 }
 function PracticeItem({ p, ttsLang }: { p: { prompt: string; answer: string; reading: string }; ttsLang: string }) {
   const [show, setShow] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [heard, setHeard] = useState<null | { text: string; match: boolean }>(null);
+  const recRef = useRef<SR | null>(null);
+  const hasAnswerJP = !!jpInLine(p.answer);
+
+  function listen() {
+    if (listening) { recRef.current?.stop(); return; }
+    const r = getRecognizer(ttsLang);
+    if (!r) return;
+    recRef.current = r;
+    setHeard(null); setListening(true);
+    const target = normJP(p.answer);
+    r.onresult = (e) => {
+      const alts: string[] = [];
+      const first = e.results[0];
+      for (let i = 0; i < first.length; i++) alts.push(first[i].transcript);
+      const best = alts[0] || "";
+      const match = alts.some((a) => { const n = normJP(a); return n && (n === target || (target.length > 2 && (n.includes(target) || target.includes(n)))); });
+      setHeard({ text: best, match });
+      if (match) sfxCorrect();
+    };
+    r.onerror = () => setListening(false);
+    r.onend = () => setListening(false);
+    try { r.start(); } catch { setListening(false); }
+  }
+
   return (
     <div style={{ padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
-      <div style={{ fontSize: 14.5, color: C.ink, marginBottom: 6 }}>{p.prompt}</div>
-      {show ? (
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontFamily: "'Zen Kaku Gothic New',sans-serif", fontSize: 17, color: C.vermilion }}>{p.answer}</div>
-            <div style={{ fontSize: 12.5, color: C.inkFaint }}>{p.reading}</div>
+      <div style={{ fontSize: 14.5, color: C.ink, marginBottom: 8 }}>{p.prompt}</div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        {show ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 180 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontFamily: "'Zen Kaku Gothic New',sans-serif", fontSize: 17, color: C.vermilion }}>{p.answer}</div>
+              <div style={{ fontSize: 12.5, color: C.inkFaint }}>{p.reading}</div>
+            </div>
+            <button onClick={() => speak(p.answer, ttsLang)} aria-label="Hear answer" style={iconBtn} className="jp-tap"><Volume2 size={18} color={C.indigoSoft} /></button>
           </div>
-          <button onClick={() => speak(p.answer, ttsLang)} aria-label="Hear answer" style={iconBtn}><Volume2 size={18} color={C.indigoSoft} /></button>
+        ) : (
+          <button onClick={() => setShow(true)} style={{ ...secondaryBtn, padding: "6px 12px", fontSize: 12.5 }} className="jp-tap">Show answer</button>
+        )}
+        {voiceSupported && hasAnswerJP && (
+          <button onClick={listen} className="jp-tap" aria-label="Speak your answer"
+            style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", fontSize: 12.5, fontWeight: 600, borderRadius: 12, cursor: "pointer", border: `1px solid ${listening ? C.vermilion : C.line}`, background: listening ? "#F3E1DC" : C.card, color: listening ? C.vermilion : C.indigo }}>
+            <Mic size={15} /> {listening ? "Listening…" : "Say it"}
+          </button>
+        )}
+      </div>
+      {heard && (
+        <div style={{ marginTop: 8, fontSize: 13, color: heard.match ? C.matcha : C.inkSoft }}>
+          {heard.match ? <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontWeight: 600 }}><Check size={15} /> Sounds right!</span> : <>I heard: <b style={{ fontFamily: "'Zen Kaku Gothic New',sans-serif" }}>{heard.text || "(nothing)"}</b></>}
         </div>
-      ) : (
-        <button onClick={() => setShow(true)} style={{ ...secondaryBtn, padding: "6px 12px", fontSize: 12.5 }}>Show answer</button>
       )}
     </div>
   );
@@ -676,13 +730,17 @@ function Bubble({ role, text, typing, ttsLang, canSpeak }: { role: string; text:
 }
 
 /* ---------- KANA TRAINER ---------- */
-function KanaTrainer({ kanaSet, ttsLang, kanaStats, saveKana }: { kanaSet: Kana[]; ttsLang: string; kanaStats: Record<string, { seen: number; correct: number }>; saveKana: (k: Record<string, { seen: number; correct: number }>) => void }) {
+function KanaTrainer({ hira, kata, ttsLang, kanaStats, saveKana }: { hira: Kana[]; kata: Kana[] | null; ttsLang: string; kanaStats: Record<string, { seen: number; correct: number }>; saveKana: (k: Record<string, { seen: number; correct: number }>) => void }) {
+  const [set, setSet] = useState<"hira" | "kata">("hira");
+  const kanaSet = set === "kata" && kata ? kata : hira;
   const [cur, setCur] = useState<Kana>(() => pickKana(kanaSet, kanaStats, null));
   const [val, setVal] = useState("");
   const [result, setResult] = useState<null | "right" | "wrong">(null);
   const [showChart, setShowChart] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const mastered = kanaSet.filter((h) => { const s = kanaStats[h.k]; return s && s.seen >= 3 && s.correct / s.seen >= 0.9; }).length;
+
+  useEffect(() => { setCur(pickKana(kanaSet, kanaStats, null)); setVal(""); setResult(null); /* eslint-disable-next-line */ }, [set]);
 
   function check() {
     if (result) { next(); return; }
@@ -691,14 +749,24 @@ function KanaTrainer({ kanaSet, ttsLang, kanaStats, saveKana }: { kanaSet: Kana[
     const s = kanaStats[cur.k] || { seen: 0, correct: 0 };
     saveKana({ ...kanaStats, [cur.k]: { seen: s.seen + 1, correct: s.correct + (right ? 1 : 0) } });
     setResult(right ? "right" : "wrong"); speak(cur.k, ttsLang);
+    if (right) sfxCorrect(); else sfxWrong();
   }
   function next() { setCur(pickKana(kanaSet, kanaStats, cur.k)); setVal(""); setResult(null); setTimeout(() => inputRef.current?.focus(), 30); }
 
   return (
     <div style={{ padding: "8px 20px 20px" }}>
+      {kata && (
+        <div style={{ display: "flex", gap: 4, background: C.card2, borderRadius: 12, padding: 4, marginBottom: 14 }}>
+          {(["hira", "kata"] as const).map((s) => (
+            <button key={s} onClick={() => { if (s !== set) sfxTap(); setSet(s); }} style={{ flex: 1, border: "none", borderRadius: 9, padding: "8px 0", fontWeight: 700, fontSize: 13.5, cursor: "pointer", background: set === s ? C.card : "transparent", color: set === s ? C.ink : C.inkFaint, boxShadow: set === s ? "0 1px 3px rgba(0,0,0,0.08)" : "none" }}>
+              {s === "hira" ? "Hiragana ひらがな" : "Katakana カタカナ"}
+            </button>
+          ))}
+        </div>
+      )}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-        <div><Eyebrow>Writing system</Eyebrow><div style={{ fontSize: 14, color: C.inkSoft, marginTop: 2 }}><b style={{ color: C.ink }}>{mastered}</b> / {kanaSet.length} mastered</div></div>
-        <button onClick={() => setShowChart((s) => !s)} style={secondaryBtn}>{showChart ? "Drill" : "See chart"}</button>
+        <div><Eyebrow>{set === "kata" ? "Katakana" : "Hiragana"}</Eyebrow><div style={{ fontSize: 14, color: C.inkSoft, marginTop: 2 }}><b style={{ color: C.ink }}>{mastered}</b> / {kanaSet.length} mastered</div></div>
+        <button onClick={() => setShowChart((s) => !s)} style={secondaryBtn} className="jp-tap">{showChart ? "Drill" : "See chart"}</button>
       </div>
       <div style={{ height: 6, background: C.card2, borderRadius: 999, overflow: "hidden", marginBottom: 18 }}>
         <div style={{ height: "100%", width: `${(mastered / kanaSet.length) * 100}%`, background: C.vermilion, transition: "width .4s" }} />
