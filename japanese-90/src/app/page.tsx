@@ -247,6 +247,7 @@ function LearnTab({ L, currentDay, start }: { L: Language; currentDay: number; s
   const [viewDay, setViewDay] = useState(maxDay);
   const [mode, setMode] = useState<"lesson" | "practice">("lesson");
   useEffect(() => { setViewDay((v) => Math.min(v, maxDay)); }, [maxDay]);
+  useEffect(() => { setMode("lesson"); }, [viewDay]); // always land on the lesson first
 
   if (!L.ready) {
     return (
