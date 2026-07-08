@@ -12,7 +12,7 @@ const C = {
   vermilion: "#CB3A22", vermilionSoft: "#E0644E", matcha: "#6E7F5B", line: "#D9D3C4",
 };
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 const MILESTONES: Record<number, string> = {
   1: "Record a 30-second voice memo today — your Day 1 baseline.",
   30: "Record a 90-second self-intro, no script. Compare to Day 1.",
@@ -65,6 +65,30 @@ function jpInLine(line: string) {
   const m = (line || "").match(/[\u3040-\u30ff\u4e00-\u9faf\u3005\u3006\u30fc々〆ヶ、。！？]+/g);
   return m ? m.join("") : "";
 }
+
+/* ---------- tiny synthesized SFX (no audio files) ---------- */
+let AC: AudioContext | null = null;
+function getAC(): AudioContext | null {
+  try {
+    if (!AC) AC = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    if (AC.state === "suspended") AC.resume();
+    return AC;
+  } catch { return null; }
+}
+function tone(freq: number, start: number, dur: number, ctx: AudioContext, gainPeak = 0.09, type: OscillatorType = "sine") {
+  const osc = ctx.createOscillator(); const gain = ctx.createGain();
+  osc.type = type; osc.frequency.value = freq;
+  osc.connect(gain); gain.connect(ctx.destination);
+  const t0 = ctx.currentTime + start;
+  gain.gain.setValueAtTime(0, t0);
+  gain.gain.linearRampToValueAtTime(gainPeak, t0 + 0.015);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  osc.start(t0); osc.stop(t0 + dur + 0.02);
+}
+function sfxCorrect() { const ctx = getAC(); if (!ctx) return; tone(660, 0, 0.14, ctx); tone(880, 0.08, 0.16, ctx); }
+function sfxWrong() { const ctx = getAC(); if (!ctx) return; tone(220, 0, 0.18, ctx, 0.07, "triangle"); tone(180, 0.09, 0.2, ctx, 0.06, "triangle"); }
+function sfxComplete() { const ctx = getAC(); if (!ctx) return; [523, 659, 784, 1047].forEach((f, i) => tone(f, i * 0.09, 0.22, ctx, 0.08)); }
+function sfxTap() { const ctx = getAC(); if (!ctx) return; tone(400, 0, 0.05, ctx, 0.03); }
 
 /* ================================================================= */
 export default function App() {
@@ -124,7 +148,20 @@ export default function App() {
         {showLang && <LangSheet current={langCode} onPick={pickLang} onClose={() => setShowLang(false)} />}
         {showSettings && (
           <SettingsSheet start={start} onClose={() => setShowSettings(false)}
-            onReset={() => { saveProgress({ doneDays: [], studyDates: [] }); saveKana({}); setShowSettings(false); }}
+            onReset={() => {
+              saveProgress({ doneDays: [], studyDates: [] });
+              saveKana({});
+              setWordStats({}); save(`words_${langCode}`, {});
+              try {
+                const toRemove: string[] = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                  const k = localStorage.key(i);
+                  if (k && (k.startsWith("chat_") || k.startsWith("reviewed_") || k.startsWith("words_"))) toRemove.push(k);
+                }
+                toRemove.forEach((k) => localStorage.removeItem(k));
+              } catch { /* */ }
+              setShowSettings(false);
+            }}
             onSetStart={(s) => { setStart(s); save("jp_start", s); setShowSettings(false); }} />
         )}
       </div>
@@ -158,7 +195,7 @@ function TabBar({ tab, setTab, hasScript }: { tab: string; setTab: (t: "today" |
         {items.map(([id, Icon, label]) => {
           const on = tab === id;
           return (
-            <button key={id} onClick={() => setTab(id)} style={{ flex: 1, background: "none", border: "none", padding: "10px 0 14px", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+            <button key={id} onClick={() => { if (!on) sfxTap(); setTab(id); }} className="jp-tap" style={{ flex: 1, background: "none", border: "none", padding: "10px 0 14px", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
               <Icon size={22} color={on ? C.vermilion : C.inkFaint} strokeWidth={on ? 2.4 : 2} />
               <span style={{ fontSize: 11, fontWeight: on ? 700 : 500, color: on ? C.ink : C.inkFaint }}>{label}</span>
             </button>
@@ -233,7 +270,7 @@ function Today({ L, day, streak, progress, start, onLearn }:
         <div style={{ display: "grid", gridTemplateColumns: "repeat(10, 1fr)", gap: 5 }}>
           {Array.from({ length: 90 }, (_, i) => {
             const d = i + 1; const stamped = progress.doneDays.includes(d); const isToday = d === day;
-            return <div key={d} title={`Day ${d}`} className={isToday && !stamped ? "jp-pulse" : ""}
+            return <div key={d} title={`Day ${d}`} className={isToday && !stamped ? "jp-pulse" : isToday && stamped ? "jp-stamp-in" : ""}
               style={{ aspectRatio: "1", borderRadius: 4, background: stamped ? C.vermilion : "transparent", border: stamped ? "none" : `1.5px solid ${isToday ? C.indigo : C.line}`, boxShadow: stamped ? "inset 0 0 0 1.5px rgba(255,255,255,0.35)" : "none" }} />;
           })}
         </div>
@@ -324,10 +361,12 @@ function Section({ label, children }: { label: string; children: React.ReactNode
 }
 function LessonView({ L, lesson, week, viewDay, done, onComplete, wordStats, onAnswer }: { L: Language; lesson?: Lesson; week?: Week; viewDay: number; done: boolean; onComplete: () => void; wordStats: Record<string, { right: number; wrong: number }>; onAnswer: (w: string, c: boolean) => void }) {
   const ttsLang = L.ttsLang;
+  const reviewKey = `reviewed_${L.code}_${viewDay}`;
   const [quizOpen, setQuizOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
-  const [reviewed, setReviewed] = useState(false);
-  useEffect(() => { setQuizOpen(false); setReviewOpen(false); setReviewed(false); }, [viewDay]);
+  const [reviewed, setReviewedState] = useState(false);
+  useEffect(() => { setQuizOpen(false); setReviewOpen(false); setReviewedState(load(reviewKey, false)); /* eslint-disable-next-line */ }, [viewDay, L.code]);
+  function setReviewed(v: boolean) { setReviewedState(v); save(reviewKey, v); }
 
   if (!lesson) {
     return (
@@ -476,12 +515,12 @@ function Quiz({ build, kind, onAnswer, onFinish, onExit }: { build: () => Questi
     setPicked(i);
     const correct = qs[idx].options[i].correct;
     onAnswer(qs[idx].key, correct);
-    if (correct) setScore((s) => s + 1);
+    if (correct) { setScore((s) => s + 1); sfxCorrect(); } else { sfxWrong(); }
   }
   function next() { if (idx + 1 >= qs.length) setFinished(true); else { setIdx((n) => n + 1); setPicked(null); } }
   function retry() { setQs(build()); setIdx(0); setPicked(null); setScore(0); setFinished(false); }
 
-  useEffect(() => { if (finished) onFinish(passed); /* eslint-disable-next-line */ }, [finished]);
+  useEffect(() => { if (finished) { onFinish(passed); if (kind === "lesson" && passed) sfxComplete(); } /* eslint-disable-next-line */ }, [finished]);
 
   if (qs.length === 0) {
     return <Card style={{ textAlign: "center" }}><p style={{ color: C.inkSoft }}>{kind === "review" ? "Nothing to review yet — come back after a few more days." : "Not enough vocabulary yet to build a quiz for this day."}</p><button onClick={onExit} style={{ ...secondaryBtn, marginTop: 12 }}>Back to lesson</button></Card>;
@@ -492,14 +531,24 @@ function Quiz({ build, kind, onAnswer, onFinish, onExit }: { build: () => Questi
     const body = kind === "review"
       ? "Nice — those come back around based on how you did."
       : passed ? "The day is stamped on your path. Keep the streak alive." : `You need ${need}/${qs.length} to pass. Review the lesson and try again.`;
+    const celebrate = kind === "lesson" && passed;
     return (
-      <Card style={{ textAlign: "center", padding: "34px 22px" }}>
+      <Card className="jp-result-in" style={{ textAlign: "center", padding: "34px 22px", position: "relative", overflow: "hidden" }}>
+        {celebrate && (
+          <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
+            {["#CB3A22", "#20416A", "#6E7F5B", "#E0644E"].flatMap((color, ci) =>
+              Array.from({ length: 4 }, (_, i) => (
+                <span key={`${ci}-${i}`} className="jp-confetti-piece" style={{ left: `${10 + (ci * 4 + i) * 6}%`, width: 6, height: 6, background: color, borderRadius: i % 2 ? "50%" : 2, animationDelay: `${(ci + i) * 0.05}s` }} />
+              ))
+            )}
+          </div>
+        )}
         <div style={{ fontFamily: "'Fraunces',serif", fontSize: 40, color: passed ? C.matcha : C.vermilion, fontWeight: 600 }}>{score}/{qs.length}</div>
         <h3 style={{ fontFamily: "'Fraunces',serif", fontSize: 22, margin: "8px 0 6px" }}>{title}</h3>
         <p style={{ color: C.inkSoft, lineHeight: 1.5, marginBottom: 18 }}>{body}</p>
         <div style={{ display: "flex", gap: 10 }}>
           {kind === "lesson" && !passed && <PrimaryButton onClick={retry} style={{ flex: 1, background: C.indigo }}>Try again</PrimaryButton>}
-          <button onClick={onExit} style={{ ...secondaryBtn, flex: 1 }}>{kind === "review" ? "Continue to lesson" : "Back to lesson"}</button>
+          <button onClick={onExit} style={{ ...secondaryBtn, flex: 1 }} className="jp-tap">{kind === "review" ? "Continue to lesson" : "Back to lesson"}</button>
         </div>
       </Card>
     );
@@ -509,27 +558,28 @@ function Quiz({ build, kind, onAnswer, onFinish, onExit }: { build: () => Questi
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-        <button onClick={onExit} style={{ ...secondaryBtn, padding: "6px 12px" }}>Exit</button>
+        <button onClick={onExit} style={{ ...secondaryBtn, padding: "6px 12px" }} className="jp-tap">Exit</button>
         <span style={{ fontSize: 13, color: C.inkFaint, fontWeight: 600 }}>{kind === "review" ? "Review" : "Question"} {idx + 1} / {qs.length}</span>
       </div>
       <div style={{ height: 6, background: C.card2, borderRadius: 999, overflow: "hidden", marginBottom: 20 }}>
         <div style={{ height: "100%", width: `${(idx / qs.length) * 100}%`, background: kind === "review" ? C.matcha : C.vermilion, transition: "width .3s" }} />
       </div>
 
-      <Card style={{ textAlign: "center", marginBottom: 16 }}>
+      <Card key={`q-${idx}`} className="jp-slide-in" style={{ textAlign: "center", marginBottom: 16 }}>
         <div style={{ ...eyebrowStyle, marginBottom: 8 }}>{q.ask}</div>
         <div style={{ fontFamily: "'Zen Kaku Gothic New',sans-serif", fontSize: 34, color: C.ink, lineHeight: 1.2 }}>{q.prompt}</div>
         {q.sub && <div style={{ fontSize: 14, color: C.inkFaint, marginTop: 4 }}>{q.sub}</div>}
       </Card>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div key={`opts-${idx}`} className="jp-slide-in" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {q.options.map((o, i) => {
           const isPicked = picked === i;
           const reveal = picked !== null;
           const bg = reveal && o.correct ? "#E7EFE4" : isPicked ? "#F3E1DC" : C.card;
           const bd = reveal && o.correct ? C.matcha : isPicked ? C.vermilion : C.line;
+          const feedbackClass = isPicked ? (o.correct ? "jp-correct" : "jp-shake") : "";
           return (
-            <button key={i} onClick={() => pick(i)} disabled={reveal}
+            <button key={i} onClick={() => pick(i)} disabled={reveal} className={`jp-tap ${feedbackClass}`}
               style={{ textAlign: "left", background: bg, border: `1.5px solid ${bd}`, borderRadius: 12, padding: "14px 16px", cursor: reveal ? "default" : "pointer", fontFamily: "'Zen Kaku Gothic New',sans-serif", fontSize: 16, color: C.ink, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
               <span>{o.label}</span>
               {reveal && o.correct && <Check size={18} color={C.matcha} />}
@@ -548,7 +598,7 @@ function Quiz({ build, kind, onAnswer, onFinish, onExit }: { build: () => Questi
 type Msg = { role: "user" | "assistant"; content: string };
 function Practice({ L, viewDay, lesson, week }: { L: Language; viewDay: number; lesson?: Lesson; week?: Week }) {
   const key = `chat_${L.code}_${viewDay}`;
-  const seed: Msg = { role: "assistant", content: lesson ? `Hi! I'm Sensei. Read the Lesson tab for Day ${viewDay} first — "${lesson.title}" — then come back here and I'll help you practice it. When you're ready, type a sentence or ask me anything.` : `Hi! I'm Sensei. Ask me anything about ${L.name}, or type a sentence and I'll check it.` };
+  const seed: Msg = { role: "assistant", content: lesson ? `Hi! I'm Sensei. Before we practice, open the Lesson tab and read Day ${viewDay}: "${lesson.title}." Then come back here and I'll help you practice it. When you're ready, type a sentence or ask me anything.` : `Hi! I'm Sensei. Ask me anything about ${L.name}, or type a sentence and I'll check it.` };
   const [msgs, setMsgs] = useState<Msg[]>([seed]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -732,7 +782,7 @@ function SettingsSheet({ start, onClose, onReset, onSetStart }: { start: string;
           <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ flex: 1, fontSize: 15, padding: "10px 12px", border: `1px solid ${C.line}`, borderRadius: 10, background: C.card, color: C.ink }} />
           <button onClick={() => onSetStart(date)} style={secondaryBtn}>Save</button>
         </div>
-        <button onClick={onReset} style={{ marginTop: 22, width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: "none", border: `1px solid ${C.vermilion}`, color: C.vermilion, borderRadius: 12, padding: "12px", fontWeight: 600, cursor: "pointer" }}><RotateCcw size={16} /> Reset progress</button>
+        <button onClick={() => { if (window.confirm("Reset all progress, quiz history, and Sensei chats? This can't be undone.")) onReset(); }} style={{ marginTop: 22, width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: "none", border: `1px solid ${C.vermilion}`, color: C.vermilion, borderRadius: 12, padding: "12px", fontWeight: 600, cursor: "pointer" }} className="jp-tap"><RotateCcw size={16} /> Reset everything</button>
         <button onClick={onClose} style={{ marginTop: 10, width: "100%", background: "none", border: "none", color: C.inkFaint, padding: 8, cursor: "pointer" }}>Close</button>
       </div>
     </div>
@@ -749,8 +799,8 @@ const eyebrowStyle: React.CSSProperties = { fontSize: 11, letterSpacing: 1.2, te
 const sheetWrap: React.CSSProperties = { position: "fixed", inset: 0, background: "rgba(28,27,33,0.4)", zIndex: 40, display: "flex", alignItems: "flex-end", justifyContent: "center" };
 const sheetInner: React.CSSProperties = { background: C.paper, width: "100%", maxWidth: 480, borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: "22px 22px 30px" };
 function Eyebrow({ children }: { children: React.ReactNode }) { return <div style={eyebrowStyle}>{children}</div>; }
-function Card({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) { return <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 16, padding: 18, ...style }}>{children}</div>; }
+function Card({ children, style, className }: { children: React.ReactNode; style?: React.CSSProperties; className?: string }) { return <div className={className} style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 16, padding: 18, ...style }}>{children}</div>; }
 function PrimaryButton({ children, style, disabled, onClick }: { children: React.ReactNode; style?: React.CSSProperties; disabled?: boolean; onClick?: () => void }) {
-  return <button onClick={onClick} disabled={disabled} style={{ background: disabled ? C.card2 : C.vermilion, color: disabled ? C.inkFaint : "#fff", border: "none", borderRadius: 14, padding: "13px 18px", fontWeight: 700, fontSize: 15, cursor: disabled ? "default" : "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, ...style }}>{children}</button>;
+  return <button onClick={onClick} disabled={disabled} className="jp-tap" style={{ background: disabled ? C.card2 : C.vermilion, color: disabled ? C.inkFaint : "#fff", border: "none", borderRadius: 14, padding: "13px 18px", fontWeight: 700, fontSize: 15, cursor: disabled ? "default" : "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, ...style }}>{children}</button>;
 }
 function Splash() { return <div style={{ background: C.paper, minHeight: "100dvh", display: "flex", alignItems: "center", justifyContent: "center", color: C.indigo, fontFamily: "'Fraunces',serif", fontSize: 30, fontWeight: 600 }}>Vocari</div>; }
