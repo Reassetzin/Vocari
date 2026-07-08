@@ -94,9 +94,11 @@ function speak(text: string) {
     window.speechSynthesis.speak(u);
   } catch { /* no voice available on this device */ }
 }
-function extractJP(text: string) {
-  const m = (text || "").match(/[\u3040-\u30ff\u4e00-\u9faf\u3005\u30fc、。！？]+/g);
-  return m ? m.join(" ") : "";
+// Pull the Japanese out of a SINGLE line (kana/kanji + JP punctuation), so we
+// can attach audio per line instead of reading the whole message as one blob.
+function jpInLine(line: string) {
+  const m = (line || "").match(/[\u3040-\u30ff\u4e00-\u9faf\u3005\u3006\u30fc々〆ヶ、。！？]+/g);
+  return m ? m.join("") : "";
 }
 
 /* ================================================================= */
@@ -440,7 +442,8 @@ Rules:
 }
 function Bubble({ role, text, typing }: { role: string; text: string; typing?: boolean }) {
   const me = role === "user";
-  const jp = typing ? "" : extractJP(text);
+  const iconColor = me ? "rgba(246,243,235,0.85)" : C.indigoSoft;
+  const lines = typing ? [] : (text || "").split("\n");
   return (
     <div style={{ display: "flex", justifyContent: me ? "flex-end" : "flex-start", marginBottom: 10 }}>
       <div style={{
@@ -448,14 +451,26 @@ function Bubble({ role, text, typing }: { role: string; text: string; typing?: b
         background: me ? C.indigo : C.card, color: me ? "#F6F3EB" : C.ink,
         border: me ? "none" : `1px solid ${C.line}`,
         borderBottomRightRadius: me ? 4 : 16, borderBottomLeftRadius: me ? 16 : 4,
-        fontFamily: "'Zen Kaku Gothic New', system-ui, sans-serif", fontSize: 15, lineHeight: 1.6, whiteSpace: "pre-wrap",
+        fontFamily: "'Zen Kaku Gothic New', system-ui, sans-serif", fontSize: 15, lineHeight: 1.6,
       }}>
-        {typing ? <span className="jp-typing">●&nbsp;●&nbsp;●</span> : text}
-        {jp && (
-          <button onClick={() => speak(jp)} aria-label="Hear the Japanese"
-            style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 8, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 12.5, fontWeight: 600, color: me ? "rgba(246,243,235,0.85)" : C.indigoSoft }}>
-            <Volume2 size={15} /> Hear it
-          </button>
+        {typing ? (
+          <span className="jp-typing">●&nbsp;●&nbsp;●</span>
+        ) : (
+          lines.map((line, i) => {
+            if (line.trim() === "") return <div key={i} style={{ height: 8 }} />;
+            const jp = jpInLine(line);
+            return (
+              <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+                <span style={{ flex: 1, whiteSpace: "pre-wrap" }}>{line}</span>
+                {jp && (
+                  <button onClick={() => speak(jp)} aria-label={`Hear ${jp}`} title="Hear this line"
+                    style={{ flexShrink: 0, marginTop: 3, background: "none", border: "none", cursor: "pointer", padding: 0, display: "inline-flex", color: iconColor }}>
+                    <Volume2 size={15} />
+                  </button>
+                )}
+              </div>
+            );
+          })
         )}
       </div>
     </div>
