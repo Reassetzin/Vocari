@@ -12,7 +12,7 @@ const C = {
   vermilion: "#CB3A22", vermilionSoft: "#E0644E", matcha: "#6E7F5B", line: "#D9D3C4",
 };
 
-const VERSION = "0.7.0";
+const VERSION = "0.7.1";
 const MILESTONES: Record<number, string> = {
   1: "Record a 30-second voice memo today — your Day 1 baseline.",
   30: "Record a 90-second self-intro, no script. Compare to Day 1.",
@@ -689,6 +689,10 @@ function Practice({ L, viewDay, lesson, week }: { L: Language; viewDay: number; 
   const [msgs, setMsgs] = useState<Msg[]>([seed]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [recState, setRecState] = useState<"idle" | "rec" | "proc">("idle");
+  const mrRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const stopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
 
   useEffect(() => { setMsgs(load<Msg[]>(key, [seed])); /* eslint-disable-next-line */ }, [key]);
@@ -721,6 +725,34 @@ Rules:
     } finally { setBusy(false); }
   }
 
+  async function toggleRec() {
+    if (recState === "rec") { mrRef.current?.stop(); return; }
+    if (recState === "proc" || busy) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = pickMime();
+      const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      chunksRef.current = [];
+      mr.ondataavailable = (e) => { if (e.data && e.data.size) chunksRef.current.push(e.data); };
+      mr.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        if (stopTimer.current) clearTimeout(stopTimer.current);
+        setRecState("proc");
+        const blob = new Blob(chunksRef.current, { type: mr.mimeType || mime || "audio/webm" });
+        try {
+          const fd = new FormData();
+          fd.append("audio", blob);
+          const res = await fetch("/api/pronounce", { method: "POST", body: fd });
+          const data = await res.json();
+          setRecState("idle");
+          if (res.ok && (data.text || "").trim()) { send(data.text.trim()); return; }
+        } catch { /* fall through */ }
+        setRecState("idle");
+      };
+      mrRef.current = mr; mr.start(); setRecState("rec");
+      stopTimer.current = setTimeout(() => { try { mr.stop(); } catch { /* */ } }, 8000);
+    } catch { setRecState("idle"); }
+  }
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
       <div ref={scroller} style={{ flex: 1, overflowY: "auto", paddingBottom: 8 }}>
@@ -730,8 +762,14 @@ Rules:
       <div style={{ display: "flex", gap: 8, alignItems: "flex-end", padding: "6px 0 14px" }}>
         <textarea value={input} onChange={(e) => setInput(e.target.value)} rows={1}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); } }}
-          placeholder={`Type in English or ${L.name}…`}
+          placeholder={recState === "rec" ? "Listening…" : recState === "proc" ? "Transcribing…" : `Type or speak in English or ${L.name}…`}
           style={{ flex: 1, resize: "none", fontSize: 15, padding: "11px 14px", border: `1px solid ${C.line}`, borderRadius: 16, background: C.card, color: C.ink, outline: "none", maxHeight: 120, fontFamily: "inherit" }} />
+        {voiceSupported && (
+          <button onClick={toggleRec} disabled={busy || recState === "proc"} aria-label="Speak to Sensei" className={`jp-tap ${recState === "rec" ? "jp-pulse" : ""}`}
+            style={{ background: recState === "rec" ? "#F3E1DC" : C.card, border: `1px solid ${recState === "rec" ? C.vermilion : C.line}`, borderRadius: 14, width: 46, height: 46, display: "flex", alignItems: "center", justifyContent: "center", cursor: recState === "proc" ? "default" : "pointer", flexShrink: 0 }}>
+            <Mic size={20} color={recState === "rec" ? C.vermilion : recState === "proc" ? C.inkFaint : C.indigo} />
+          </button>
+        )}
         <button onClick={() => send(input)} disabled={busy || !input.trim()} aria-label="Send"
           style={{ background: input.trim() ? C.vermilion : C.card2, border: "none", borderRadius: 14, width: 46, height: 46, display: "flex", alignItems: "center", justifyContent: "center", cursor: input.trim() ? "pointer" : "default", flexShrink: 0 }}>
           <Send size={20} color={input.trim() ? "#fff" : C.inkFaint} />
