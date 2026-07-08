@@ -12,7 +12,7 @@ const C = {
   vermilion: "#CB3A22", vermilionSoft: "#E0644E", matcha: "#6E7F5B", line: "#D9D3C4",
 };
 
-const VERSION = "0.6.1";
+const VERSION = "0.7.0";
 const MILESTONES: Record<number, string> = {
   1: "Record a 30-second voice memo today — your Day 1 baseline.",
   30: "Record a 90-second self-intro, no script. Compare to Day 1.",
@@ -66,19 +66,18 @@ function jpInLine(line: string) {
   return m ? m.join("") : "";
 }
 
-/* ---------- speech recognition (voice input — checks WORDS heard, not accent quality) ---------- */
-type SR = { lang: string; interimResults: boolean; maxAlternatives: number; continuous: boolean; onresult: (e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void; onerror: () => void; onend: () => void; start: () => void; stop: () => void };
-function getRecognizer(lang: string): SR | null {
+/* ---------- voice input via MediaRecorder + Whisper (works on iPhone) ---------- */
+const voiceSupported = typeof window !== "undefined" && typeof navigator !== "undefined"
+  && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
+  && typeof window.MediaRecorder !== "undefined";
+function pickMime(): string {
   try {
-    const w = window as unknown as { SpeechRecognition?: new () => SR; webkitSpeechRecognition?: new () => SR };
-    const Ctor = w.SpeechRecognition || w.webkitSpeechRecognition;
-    if (!Ctor) return null;
-    const r = new Ctor();
-    r.lang = lang; r.interimResults = false; r.maxAlternatives = 5; r.continuous = false;
-    return r;
-  } catch { return null; }
+    if (window.MediaRecorder.isTypeSupported("audio/webm")) return "audio/webm";
+    if (window.MediaRecorder.isTypeSupported("audio/mp4")) return "audio/mp4";
+    if (window.MediaRecorder.isTypeSupported("audio/ogg")) return "audio/ogg";
+  } catch { /* */ }
+  return "";
 }
-const voiceSupported = typeof window !== "undefined" && !!((window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown }).SpeechRecognition || (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition);
 function normJP(s: string) { return (s || "").replace(/[\s、。!！?？「」・,.]/g, ""); }
 
 /* ---------- tiny synthesized SFX (no audio files) ---------- */
@@ -432,7 +431,7 @@ function LessonView({ L, lesson, week, viewDay, done, onComplete, wordStats, onA
           {lesson.practice.map((p, i) => <PracticeItem key={i} p={p} ttsLang={ttsLang} voiceOK={voiceOK} />)}
           {!voiceOK && (
             <p style={{ fontSize: 12, color: C.inkFaint, marginTop: 8, lineHeight: 1.5 }}>
-              🎤 The &quot;Say it&quot; voice check needs Chrome or an Android browser — this browser (or the installed app on iPhone) doesn&apos;t support it. Say the answers aloud anyway and use 🔊 to compare.
+              🎤 Voice check needs microphone access and a network connection. If the &quot;Say it&quot; button is missing, your browser doesn&apos;t support recording — say the answers aloud anyway and use 🔊 to compare.
             </p>
           )}
         </Section>
@@ -452,32 +451,57 @@ function LessonView({ L, lesson, week, viewDay, done, onComplete, wordStats, onA
 }
 function PracticeItem({ p, ttsLang, voiceOK }: { p: { prompt: string; answer: string; reading: string }; ttsLang: string; voiceOK: boolean }) {
   const [show, setShow] = useState(false);
-  const [listening, setListening] = useState(false);
+  const [state, setState] = useState<"idle" | "rec" | "proc">("idle");
   const [heard, setHeard] = useState<null | { text: string; match: boolean }>(null);
-  const recRef = useRef<SR | null>(null);
+  const mrRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const stopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasAnswerJP = !!jpInLine(p.answer);
 
-  function listen() {
-    if (listening) { recRef.current?.stop(); return; }
-    const r = getRecognizer(ttsLang);
-    if (!r) return;
-    recRef.current = r;
-    setHeard(null); setListening(true);
-    const target = normJP(p.answer);
-    r.onresult = (e) => {
-      const alts: string[] = [];
-      const first = e.results[0];
-      for (let i = 0; i < first.length; i++) alts.push(first[i].transcript);
-      const best = alts[0] || "";
-      const match = alts.some((a) => { const n = normJP(a); return n && (n === target || (target.length > 2 && (n.includes(target) || target.includes(n)))); });
-      setHeard({ text: best, match });
-      if (match) sfxCorrect();
-    };
-    r.onerror = () => setListening(false);
-    r.onend = () => setListening(false);
-    try { r.start(); } catch { setListening(false); }
+  async function toggle() {
+    if (state === "rec") { mrRef.current?.stop(); return; }
+    if (state === "proc") return;
+    setHeard(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = pickMime();
+      const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      chunksRef.current = [];
+      mr.ondataavailable = (e) => { if (e.data && e.data.size) chunksRef.current.push(e.data); };
+      mr.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        if (stopTimer.current) clearTimeout(stopTimer.current);
+        setState("proc");
+        const blob = new Blob(chunksRef.current, { type: mr.mimeType || mime || "audio/webm" });
+        try {
+          const fd = new FormData();
+          fd.append("audio", blob);
+          const res = await fetch("/api/pronounce", { method: "POST", body: fd });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data?.error || "err");
+          const heardText = (data.text || "").trim();
+          const target = normJP(p.answer);
+          const n = normJP(heardText);
+          const match = !!n && (n === target || (target.length > 2 && (n.includes(target) || target.includes(n))));
+          setHeard({ text: heardText, match });
+          if (match) sfxCorrect();
+        } catch {
+          setHeard({ text: "(couldn't reach the checker — is OPENAI_API_KEY set?)", match: false });
+        }
+        setState("idle");
+      };
+      mrRef.current = mr;
+      mr.start();
+      setState("rec");
+      // auto-stop after 6s so you never have to tap twice
+      stopTimer.current = setTimeout(() => { try { mr.stop(); } catch { /* */ } }, 6000);
+    } catch {
+      setState("idle");
+      setHeard({ text: "(microphone permission needed)", match: false });
+    }
   }
 
+  const micLabel = state === "rec" ? "Stop" : state === "proc" ? "Checking…" : "Say it";
   return (
     <div style={{ padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
       <div style={{ fontSize: 14.5, color: C.ink, marginBottom: 8 }}>{p.prompt}</div>
@@ -494,9 +518,9 @@ function PracticeItem({ p, ttsLang, voiceOK }: { p: { prompt: string; answer: st
           <button onClick={() => setShow(true)} style={{ ...secondaryBtn, padding: "6px 12px", fontSize: 12.5 }} className="jp-tap">Show answer</button>
         )}
         {voiceOK && hasAnswerJP && (
-          <button onClick={listen} className="jp-tap" aria-label="Speak your answer"
-            style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", fontSize: 12.5, fontWeight: 600, borderRadius: 12, cursor: "pointer", border: `1px solid ${listening ? C.vermilion : C.line}`, background: listening ? "#F3E1DC" : C.card, color: listening ? C.vermilion : C.indigo }}>
-            <Mic size={15} /> {listening ? "Listening…" : "Say it"}
+          <button onClick={toggle} className={`jp-tap ${state === "rec" ? "jp-pulse" : ""}`} aria-label="Speak your answer" disabled={state === "proc"}
+            style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", fontSize: 12.5, fontWeight: 600, borderRadius: 12, cursor: state === "proc" ? "default" : "pointer", border: `1px solid ${state === "rec" ? C.vermilion : C.line}`, background: state === "rec" ? "#F3E1DC" : C.card, color: state === "rec" ? C.vermilion : C.indigo }}>
+            <Mic size={15} /> {micLabel}
           </button>
         )}
       </div>
