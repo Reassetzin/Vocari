@@ -12,7 +12,7 @@ const C = {
   vermilion: "#CB3A22", vermilionSoft: "#E0644E", matcha: "#6E7F5B", line: "#D9D3C4",
 };
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 const MILESTONES: Record<number, string> = {
   1: "Record a 30-second voice memo today — your Day 1 baseline.",
   30: "Record a 90-second self-intro, no script. Compare to Day 1.",
@@ -74,6 +74,7 @@ export default function App() {
   const [start, setStart] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ doneDays: number[]; studyDates: string[] }>({ doneDays: [], studyDates: [] });
   const [kanaStats, setKanaStats] = useState<Record<string, { seen: number; correct: number }>>({});
+  const [wordStats, setWordStats] = useState<Record<string, { right: number; wrong: number }>>({});
   const [showSettings, setShowSettings] = useState(false);
   const [showLang, setShowLang] = useState(false);
 
@@ -85,6 +86,8 @@ export default function App() {
     setLoaded(true);
     try { window.speechSynthesis.getVoices(); window.speechSynthesis.onvoiceschanged = refreshVoices; } catch { /* */ }
   }, []);
+
+  useEffect(() => { if (loaded) setWordStats(load(`words_${langCode}`, {})); }, [langCode, loaded]);
 
   const L = LANGUAGES[langCode] || LANGUAGES[DEFAULT_LANG];
   const day = dayNumber(start);
@@ -98,6 +101,13 @@ export default function App() {
       save("jp_progress", np); return np;
     });
   }, []);
+  const answerWord = useCallback((wordKey: string, correct: boolean) => {
+    setWordStats((w) => {
+      const s = w[wordKey] || { right: 0, wrong: 0 };
+      const nw = { ...w, [wordKey]: { right: s.right + (correct ? 1 : 0), wrong: s.wrong + (correct ? 0 : 1) } };
+      save(`words_${langCode}`, nw); return nw;
+    });
+  }, [langCode]);
   function pickLang(code: string) { setLangCode(code); save("app_lang", code); setShowLang(false); if (tab === "kana" && !LANGUAGES[code].hasScript) setTab("learn"); }
 
   if (!loaded) return <Splash />;
@@ -108,7 +118,7 @@ export default function App() {
       <div style={{ maxWidth: 480, margin: "0 auto", paddingBottom: 84, minHeight: "100dvh", position: "relative" }}>
         <TopBar L={L} onLang={() => setShowLang(true)} onSettings={() => setShowSettings(true)} />
         {tab === "today" && <Today L={L} day={day} streak={streak} progress={progress} start={start} onLearn={() => setTab("learn")} />}
-        {tab === "learn" && <LearnTab L={L} currentDay={day} start={start} progress={progress} onComplete={completeDay} />}
+        {tab === "learn" && <LearnTab L={L} currentDay={day} start={start} progress={progress} onComplete={completeDay} wordStats={wordStats} onAnswer={answerWord} />}
         {tab === "kana" && L.kana && <KanaTrainer kanaSet={L.kana} ttsLang={L.ttsLang} kanaStats={kanaStats} saveKana={saveKana} />}
         <TabBar tab={tab} setTab={setTab} hasScript={L.hasScript} />
         {showLang && <LangSheet current={langCode} onPick={pickLang} onClose={() => setShowLang(false)} />}
@@ -244,7 +254,7 @@ function VersionFooter() {
 }
 
 /* ---------- LEARN (fixed lesson + practice, per day) ---------- */
-function LearnTab({ L, currentDay, start, progress, onComplete }: { L: Language; currentDay: number; start: string; progress: { doneDays: number[]; studyDates: string[] }; onComplete: (d: number) => void }) {
+function LearnTab({ L, currentDay, start, progress, onComplete, wordStats, onAnswer }: { L: Language; currentDay: number; start: string; progress: { doneDays: number[]; studyDates: string[] }; onComplete: (d: number) => void; wordStats: Record<string, { right: number; wrong: number }>; onAnswer: (w: string, c: boolean) => void }) {
   const maxDay = Math.max(1, Math.min(90, currentDay < 1 ? 1 : currentDay));
   const preview = currentDay < 1;
   const [viewDay, setViewDay] = useState(maxDay);
@@ -281,17 +291,17 @@ function LearnTab({ L, currentDay, start, progress, onComplete }: { L: Language;
           style={{ ...navBtn, opacity: viewDay >= maxDay ? 0.3 : 1 }}><ChevronRight size={20} color={C.indigo} /></button>
       </div>
 
-      {/* segmented */}
+      {/* segmented — Sensei first, but opens on Lesson */}
       <div style={{ display: "flex", gap: 4, background: C.card2, borderRadius: 12, padding: 4, marginBottom: 12 }}>
-        {(["lesson", "practice"] as const).map((m) => (
+        {(["practice", "lesson"] as const).map((m) => (
           <button key={m} onClick={() => setMode(m)} style={{ flex: 1, border: "none", borderRadius: 9, padding: "8px 0", fontWeight: 700, fontSize: 13.5, cursor: "pointer", background: mode === m ? C.card : "transparent", color: mode === m ? C.ink : C.inkFaint, boxShadow: mode === m ? "0 1px 3px rgba(0,0,0,0.08)" : "none" }}>
-            {m === "lesson" ? "Lesson" : "Practice"}
+            {m === "practice" ? "Sensei" : "Lesson"}
           </button>
         ))}
       </div>
 
       {mode === "lesson"
-        ? <div style={{ overflowY: "auto", paddingBottom: 20 }}><LessonView L={L} lesson={lesson} week={week} viewDay={viewDay} done={progress.doneDays.includes(viewDay)} onComplete={() => onComplete(viewDay)} /></div>
+        ? <div style={{ overflowY: "auto", paddingBottom: 20 }}><LessonView L={L} lesson={lesson} week={week} viewDay={viewDay} done={progress.doneDays.includes(viewDay)} onComplete={() => onComplete(viewDay)} wordStats={wordStats} onAnswer={onAnswer} /></div>
         : <Practice L={L} viewDay={viewDay} lesson={lesson} week={week} />}
     </div>
   );
@@ -312,10 +322,12 @@ function Row({ text, reading, meaning, ttsLang }: { text: string; reading: strin
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return <div style={{ marginBottom: 18 }}><div style={{ ...eyebrowStyle, marginBottom: 6 }}>{label}</div>{children}</div>;
 }
-function LessonView({ L, lesson, week, viewDay, done, onComplete }: { L: Language; lesson?: Lesson; week?: Week; viewDay: number; done: boolean; onComplete: () => void }) {
+function LessonView({ L, lesson, week, viewDay, done, onComplete, wordStats, onAnswer }: { L: Language; lesson?: Lesson; week?: Week; viewDay: number; done: boolean; onComplete: () => void; wordStats: Record<string, { right: number; wrong: number }>; onAnswer: (w: string, c: boolean) => void }) {
   const ttsLang = L.ttsLang;
   const [quizOpen, setQuizOpen] = useState(false);
-  useEffect(() => { setQuizOpen(false); }, [viewDay]);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewed, setReviewed] = useState(false);
+  useEffect(() => { setQuizOpen(false); setReviewOpen(false); setReviewed(false); }, [viewDay]);
 
   if (!lesson) {
     return (
@@ -323,15 +335,33 @@ function LessonView({ L, lesson, week, viewDay, done, onComplete }: { L: Languag
         <Eyebrow>Full lesson coming soon</Eyebrow>
         <h3 style={{ fontFamily: "'Fraunces',serif", fontSize: 19, margin: "6px 0 8px" }}>{week?.title || "This week"}</h3>
         <p style={{ color: C.inkSoft, lineHeight: 1.6, fontFamily: "'Zen Kaku Gothic New',sans-serif" }}>{week?.grammar}</p>
-        <p style={{ color: C.inkFaint, fontSize: 13.5, marginTop: 12 }}>The written lesson for this day is on its way. Meanwhile, switch to <b>Practice</b> — Sensei can teach and drill this week&apos;s focus with you now.</p>
+        <p style={{ color: C.inkFaint, fontSize: 13.5, marginTop: 12 }}>The written lesson for this day is on its way. Meanwhile, switch to <b>Sensei</b> — the tutor can teach and drill this week&apos;s focus with you now.</p>
       </Card>
     );
   }
 
-  if (quizOpen) return <Quiz L={L} viewDay={viewDay} onPass={() => { onComplete(); }} onExit={() => setQuizOpen(false)} />;
+  if (quizOpen) return <Quiz build={() => buildQuiz(L, viewDay)} kind="lesson" onAnswer={onAnswer} onFinish={(passed) => { if (passed) onComplete(); }} onExit={() => setQuizOpen(false)} />;
+  if (reviewOpen) return <Quiz build={() => buildReview(L, viewDay, wordStats)} kind="review" onAnswer={onAnswer} onFinish={() => setReviewed(true)} onExit={() => { setReviewed(true); setReviewOpen(false); }} />;
+
+  const reviewCount = buildReview(L, viewDay, wordStats).length;
 
   return (
     <div>
+      {/* spaced review first */}
+      {reviewCount > 0 && (
+        <div style={{ background: reviewed ? C.card : "#EAF0EA", border: `1px solid ${reviewed ? C.line : C.matcha}`, borderRadius: 14, padding: "14px 16px", marginBottom: 18 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 14.5, color: C.ink, display: "flex", alignItems: "center", gap: 6 }}>
+                {reviewed ? <><Check size={16} color={C.matcha} /> Reviewed</> : <>🔁 Warm-up review</>}
+              </div>
+              <div style={{ fontSize: 12.5, color: C.inkSoft, marginTop: 2 }}>{reviewed ? "Nice — now dive into today's lesson." : `${reviewCount} words from past days, before you learn new ones.`}</div>
+            </div>
+            {!reviewed && <button onClick={() => setReviewOpen(true)} style={{ ...secondaryBtn, whiteSpace: "nowrap", borderColor: C.matcha, color: C.matcha }}>Start</button>}
+          </div>
+        </div>
+      )}
+
       <h3 style={{ fontFamily: "'Fraunces',serif", fontWeight: 600, fontSize: 22, margin: "0 0 14px" }}>{lesson.title}</h3>
 
       <div style={{ background: C.indigo, color: "#F6F3EB", borderRadius: 14, padding: "14px 16px", marginBottom: 18 }}>
@@ -377,10 +407,11 @@ function PracticeItem({ p, ttsLang }: { p: { prompt: string; answer: string; rea
   );
 }
 
-/* ---------- QUIZ (deterministic; built from cumulative vocab) ---------- */
+/* ---------- QUIZ ENGINE (shared by lesson quiz + spaced review) ---------- */
 type QOption = { label: string; correct: boolean };
-type Question = { prompt: string; sub?: string; ask: string; options: QOption[] };
+type Question = { key: string; prompt: string; sub?: string; ask: string; options: QOption[] };
 function shuffle<T>(a: T[]): T[] { const b = [...a]; for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; }
+
 function buildQuiz(L: Language, viewDay: number): Question[] {
   const seen: Record<string, { text: string; reading: string; meaning: string }> = {};
   L.lessons.filter((l) => l.day <= viewDay).forEach((l) => l.vocab.forEach((v) => { seen[v.text] = v; }));
@@ -389,19 +420,50 @@ function buildQuiz(L: Language, viewDay: number): Question[] {
   const ownUniq = own.filter((v, i, arr) => arr.findIndex((x) => x.text === v.text) === i);
   let targets = shuffle(ownUniq).slice(0, 5);
   if (targets.length < 5) targets = targets.concat(shuffle(pool.filter((p) => !targets.some((t) => t.text === p.text))).slice(0, 5 - targets.length));
-  if (pool.length < 4) return []; // not enough to build 4-option questions
-  return targets.map((t, i) => {
-    const distract = shuffle(pool.filter((p) => p.text !== t.text)).slice(0, 3);
-    if (i % 2 === 0) {
-      const opts = shuffle([t, ...distract]).map((v) => ({ label: v.meaning, correct: v.text === t.text }));
-      return { prompt: t.text, sub: t.reading, ask: "What does this mean?", options: opts };
-    }
-    const opts = shuffle([t, ...distract]).map((v) => ({ label: v.text, correct: v.text === t.text }));
-    return { prompt: t.meaning, ask: "How do you say this?", options: opts };
-  });
+  if (pool.length < 4) return [];
+  return targets.map((t, i) => makeQuestion(t, pool, i));
 }
-function Quiz({ L, viewDay, onPass, onExit }: { L: Language; viewDay: number; onPass: () => void; onExit: () => void }) {
-  const [qs, setQs] = useState<Question[]>(() => buildQuiz(L, viewDay));
+
+// Spaced review: pulled from days BEFORE viewDay, weighted toward words the
+// learner has gotten wrong more (or hasn't been quizzed on at all yet).
+function buildReview(L: Language, viewDay: number, stats: Record<string, { right: number; wrong: number }>): Question[] {
+  const seen: Record<string, { text: string; reading: string; meaning: string }> = {};
+  L.lessons.filter((l) => l.day < viewDay).forEach((l) => l.vocab.forEach((v) => { seen[v.text] = v; }));
+  const pool = Object.values(seen);
+  if (pool.length < 4) return [];
+  const weighted = pool.map((v) => {
+    const s = stats[v.text];
+    let w = 3; // never-tested words get solid priority
+    if (s) { const total = s.right + s.wrong; const acc = total ? s.right / total : 0.5; w = acc < 0.5 ? 5 : acc < 0.85 ? 2.5 : 0.6; }
+    return { v, w };
+  });
+  const total = weighted.reduce((a, b) => a + b.w, 0);
+  const picked: typeof pool = [];
+  const avail = [...weighted];
+  const count = Math.min(5, pool.length);
+  for (let n = 0; n < count && avail.length; n++) {
+    let r = Math.random() * avail.reduce((a, b) => a + b.w, 0);
+    let idx = 0;
+    for (; idx < avail.length; idx++) { r -= avail[idx].w; if (r <= 0) break; }
+    idx = Math.min(idx, avail.length - 1);
+    picked.push(avail[idx].v);
+    avail.splice(idx, 1);
+  }
+  void total;
+  return picked.map((t, i) => makeQuestion(t, pool, i));
+}
+function makeQuestion(t: { text: string; reading: string; meaning: string }, pool: { text: string; reading: string; meaning: string }[], i: number): Question {
+  const distract = shuffle(pool.filter((p) => p.text !== t.text)).slice(0, 3);
+  if (i % 2 === 0) {
+    const opts = shuffle([t, ...distract]).map((v) => ({ label: v.meaning, correct: v.text === t.text }));
+    return { key: t.text, prompt: t.text, sub: t.reading, ask: "What does this mean?", options: opts };
+  }
+  const opts = shuffle([t, ...distract]).map((v) => ({ label: v.text, correct: v.text === t.text }));
+  return { key: t.text, prompt: t.meaning, ask: "How do you say this?", options: opts };
+}
+
+function Quiz({ build, kind, onAnswer, onFinish, onExit }: { build: () => Question[]; kind: "lesson" | "review"; onAnswer: (w: string, c: boolean) => void; onFinish: (passed: boolean) => void; onExit: () => void }) {
+  const [qs, setQs] = useState<Question[]>(build);
   const [idx, setIdx] = useState(0);
   const [picked, setPicked] = useState<number | null>(null);
   const [score, setScore] = useState(0);
@@ -412,29 +474,32 @@ function Quiz({ L, viewDay, onPass, onExit }: { L: Language; viewDay: number; on
   function pick(i: number) {
     if (picked !== null) return;
     setPicked(i);
-    if (qs[idx].options[i].correct) setScore((s) => s + 1);
+    const correct = qs[idx].options[i].correct;
+    onAnswer(qs[idx].key, correct);
+    if (correct) setScore((s) => s + 1);
   }
-  function next() {
-    if (idx + 1 >= qs.length) { setFinished(true); }
-    else { setIdx((n) => n + 1); setPicked(null); }
-  }
-  function retry() { setQs(buildQuiz(L, viewDay)); setIdx(0); setPicked(null); setScore(0); setFinished(false); }
+  function next() { if (idx + 1 >= qs.length) setFinished(true); else { setIdx((n) => n + 1); setPicked(null); } }
+  function retry() { setQs(build()); setIdx(0); setPicked(null); setScore(0); setFinished(false); }
 
-  useEffect(() => { if (finished && passed) onPass(); /* eslint-disable-next-line */ }, [finished]);
+  useEffect(() => { if (finished) onFinish(passed); /* eslint-disable-next-line */ }, [finished]);
 
   if (qs.length === 0) {
-    return <Card style={{ textAlign: "center" }}><p style={{ color: C.inkSoft }}>Not enough vocabulary yet to build a quiz for this day.</p><button onClick={onExit} style={{ ...secondaryBtn, marginTop: 12 }}>Back to lesson</button></Card>;
+    return <Card style={{ textAlign: "center" }}><p style={{ color: C.inkSoft }}>{kind === "review" ? "Nothing to review yet — come back after a few more days." : "Not enough vocabulary yet to build a quiz for this day."}</p><button onClick={onExit} style={{ ...secondaryBtn, marginTop: 12 }}>Back to lesson</button></Card>;
   }
 
   if (finished) {
+    const title = kind === "review" ? (passed ? "Warmed up! 🔁" : "Good review") : (passed ? "Day complete! 🎌" : "Almost there");
+    const body = kind === "review"
+      ? "Nice — those come back around based on how you did."
+      : passed ? "The day is stamped on your path. Keep the streak alive." : `You need ${need}/${qs.length} to pass. Review the lesson and try again.`;
     return (
       <Card style={{ textAlign: "center", padding: "34px 22px" }}>
         <div style={{ fontFamily: "'Fraunces',serif", fontSize: 40, color: passed ? C.matcha : C.vermilion, fontWeight: 600 }}>{score}/{qs.length}</div>
-        <h3 style={{ fontFamily: "'Fraunces',serif", fontSize: 22, margin: "8px 0 6px" }}>{passed ? "Day complete! 🎌" : "Almost there"}</h3>
-        <p style={{ color: C.inkSoft, lineHeight: 1.5, marginBottom: 18 }}>{passed ? "Nice work — the day is stamped on your path. Keep the streak alive." : `You need ${need}/${qs.length} to pass. Review the lesson and try again.`}</p>
+        <h3 style={{ fontFamily: "'Fraunces',serif", fontSize: 22, margin: "8px 0 6px" }}>{title}</h3>
+        <p style={{ color: C.inkSoft, lineHeight: 1.5, marginBottom: 18 }}>{body}</p>
         <div style={{ display: "flex", gap: 10 }}>
-          <PrimaryButton onClick={retry} style={{ flex: 1, background: C.indigo }}>Try again</PrimaryButton>
-          <button onClick={onExit} style={{ ...secondaryBtn, flex: 1 }}>Back to lesson</button>
+          {kind === "lesson" && !passed && <PrimaryButton onClick={retry} style={{ flex: 1, background: C.indigo }}>Try again</PrimaryButton>}
+          <button onClick={onExit} style={{ ...secondaryBtn, flex: 1 }}>{kind === "review" ? "Continue to lesson" : "Back to lesson"}</button>
         </div>
       </Card>
     );
@@ -445,10 +510,10 @@ function Quiz({ L, viewDay, onPass, onExit }: { L: Language; viewDay: number; on
     <div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
         <button onClick={onExit} style={{ ...secondaryBtn, padding: "6px 12px" }}>Exit</button>
-        <span style={{ fontSize: 13, color: C.inkFaint, fontWeight: 600 }}>Question {idx + 1} / {qs.length}</span>
+        <span style={{ fontSize: 13, color: C.inkFaint, fontWeight: 600 }}>{kind === "review" ? "Review" : "Question"} {idx + 1} / {qs.length}</span>
       </div>
       <div style={{ height: 6, background: C.card2, borderRadius: 999, overflow: "hidden", marginBottom: 20 }}>
-        <div style={{ height: "100%", width: `${(idx / qs.length) * 100}%`, background: C.vermilion, transition: "width .3s" }} />
+        <div style={{ height: "100%", width: `${(idx / qs.length) * 100}%`, background: kind === "review" ? C.matcha : C.vermilion, transition: "width .3s" }} />
       </div>
 
       <Card style={{ textAlign: "center", marginBottom: 16 }}>
@@ -483,7 +548,7 @@ function Quiz({ L, viewDay, onPass, onExit }: { L: Language; viewDay: number; on
 type Msg = { role: "user" | "assistant"; content: string };
 function Practice({ L, viewDay, lesson, week }: { L: Language; viewDay: number; lesson?: Lesson; week?: Week }) {
   const key = `chat_${L.code}_${viewDay}`;
-  const seed: Msg = { role: "assistant", content: lesson ? `Ready to practice Day ${viewDay} — "${lesson.title}". Use a button below, or type a sentence using today's grammar and I'll check it. Say it out loud first!` : `Let's practice Week ${Math.ceil(viewDay / 7)} — ${week?.title || "today's focus"}. Ask me anything, or type a sentence and I'll check it.` };
+  const seed: Msg = { role: "assistant", content: lesson ? `Hi! I'm Sensei. Read the Lesson tab for Day ${viewDay} first — "${lesson.title}" — then come back here and I'll help you practice it. When you're ready, type a sentence or ask me anything.` : `Hi! I'm Sensei. Ask me anything about ${L.name}, or type a sentence and I'll check it.` };
   const [msgs, setMsgs] = useState<Msg[]>([seed]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -519,18 +584,11 @@ Rules:
     } finally { setBusy(false); }
   }
 
-  const chips = lesson
-    ? ["Check my sentence", "Quiz me on today's words", "Explain the grammar again", "Roleplay using today's words"]
-    : ["Teach me this week's focus", "Quiz me", "Roleplay a simple conversation"];
-
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
       <div ref={scroller} style={{ flex: 1, overflowY: "auto", paddingBottom: 8 }}>
         {msgs.map((m, i) => <Bubble key={i} role={m.role} text={m.content} ttsLang={L.ttsLang} canSpeak={L.code === "ja"} />)}
         {busy && <Bubble role="assistant" text="…" typing ttsLang={L.ttsLang} canSpeak={false} />}
-      </div>
-      <div style={{ display: "flex", gap: 8, overflowX: "auto", padding: "6px 0" }} className="jp-noscroll">
-        {chips.map((c) => <button key={c} onClick={() => send(c)} disabled={busy} style={{ whiteSpace: "nowrap", fontSize: 12.5, color: C.indigo, background: C.card, border: `1px solid ${C.line}`, borderRadius: 999, padding: "7px 13px", cursor: "pointer" }}>{c}</button>)}
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "flex-end", padding: "6px 0 14px" }}>
         <textarea value={input} onChange={(e) => setInput(e.target.value)} rows={1}
