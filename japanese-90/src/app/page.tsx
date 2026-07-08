@@ -12,7 +12,7 @@ const C = {
   vermilion: "#CB3A22", vermilionSoft: "#E0644E", matcha: "#6E7F5B", line: "#D9D3C4",
 };
 
-const DAILY_BLOCKS = ["SRS review", "New vocab", "Grammar", "Listening", "Speaking / shadow", "Reading", "Writing", "Conversation (3×/wk)"];
+const VERSION = "0.3.0";
 const MILESTONES: Record<number, string> = {
   1: "Record a 30-second voice memo today — your Day 1 baseline.",
   30: "Record a 90-second self-intro, no script. Compare to Day 1.",
@@ -92,6 +92,12 @@ export default function App() {
 
   const saveProgress = useCallback((p: typeof progress) => { setProgress(p); save("jp_progress", p); }, []);
   const saveKana = useCallback((k: typeof kanaStats) => { setKanaStats(k); save("jp_kana", k); }, []);
+  const completeDay = useCallback((d: number) => {
+    setProgress((p) => {
+      const np = { doneDays: [...new Set([...p.doneDays, d])], studyDates: [...new Set([...p.studyDates, ymd(new Date())])] };
+      save("jp_progress", np); return np;
+    });
+  }, []);
   function pickLang(code: string) { setLangCode(code); save("app_lang", code); setShowLang(false); if (tab === "kana" && !LANGUAGES[code].hasScript) setTab("learn"); }
 
   if (!loaded) return <Splash />;
@@ -101,8 +107,8 @@ export default function App() {
     <div style={{ background: C.paper, color: C.ink, minHeight: "100dvh" }}>
       <div style={{ maxWidth: 480, margin: "0 auto", paddingBottom: 84, minHeight: "100dvh", position: "relative" }}>
         <TopBar L={L} onLang={() => setShowLang(true)} onSettings={() => setShowSettings(true)} />
-        {tab === "today" && <Today L={L} day={day} streak={streak} progress={progress} saveProgress={saveProgress} start={start} onLearn={() => setTab("learn")} />}
-        {tab === "learn" && <LearnTab L={L} currentDay={day} start={start} />}
+        {tab === "today" && <Today L={L} day={day} streak={streak} progress={progress} start={start} onLearn={() => setTab("learn")} />}
+        {tab === "learn" && <LearnTab L={L} currentDay={day} start={start} progress={progress} onComplete={completeDay} />}
         {tab === "kana" && L.kana && <KanaTrainer kanaSet={L.kana} ttsLang={L.ttsLang} kanaStats={kanaStats} saveKana={saveKana} />}
         <TabBar tab={tab} setTab={setTab} hasScript={L.hasScript} />
         {showLang && <LangSheet current={langCode} onPick={pickLang} onClose={() => setShowLang(false)} />}
@@ -154,18 +160,14 @@ function TabBar({ tab, setTab, hasScript }: { tab: string; setTab: (t: "today" |
 }
 
 /* ---------- TODAY ---------- */
-function Today({ L, day, streak, progress, saveProgress, start, onLearn }:
-  { L: Language; day: number; streak: number; progress: { doneDays: number[]; studyDates: string[] }; saveProgress: (p: { doneDays: number[]; studyDates: string[] }) => void; start: string; onLearn: () => void }) {
+function Today({ L, day, streak, progress, start, onLearn }:
+  { L: Language; day: number; streak: number; progress: { doneDays: number[]; studyDates: string[] }; start: string; onLearn: () => void }) {
   const notStarted = day < 1;
   const done = day > 90;
   const doneToday = progress.doneDays.includes(day);
   const milestone = MILESTONES[day];
   const week = L.weeks.length ? L.weeks[Math.min(L.weeks.length - 1, Math.max(0, Math.ceil(day / 7) - 1))] : null;
-
-  function markComplete() {
-    if (doneToday || notStarted || done) return;
-    saveProgress({ doneDays: [...new Set([...progress.doneDays, day])], studyDates: [...new Set([...progress.studyDates, ymd(new Date())])] });
-  }
+  const lesson = L.lessons.find((l) => l.day === day);
 
   if (notStarted) {
     return (
@@ -178,6 +180,7 @@ function Today({ L, day, streak, progress, saveProgress, start, onLearn }:
           </p>
         </Card>
         <PrimaryButton onClick={onLearn} style={{ marginTop: 14 }}>Preview Day 1 <ChevronRight size={18} /></PrimaryButton>
+        <VersionFooter />
       </div>
     );
   }
@@ -200,6 +203,18 @@ function Today({ L, day, streak, progress, saveProgress, start, onLearn }:
         </div>
       </div>
 
+      {/* start today's lesson */}
+      {!done && (
+        <Card style={{ marginBottom: 14 }}>
+          <Eyebrow>{doneToday ? "Today · complete" : "Today's lesson"}</Eyebrow>
+          <h3 style={{ fontFamily: "'Fraunces',serif", fontWeight: 600, fontSize: 21, margin: "6px 0 4px" }}>{lesson ? lesson.title : week ? week.title : "Lesson"}</h3>
+          {lesson && <p style={{ color: C.inkSoft, fontSize: 13.5, margin: "0 0 14px" }}>{lesson.grammar.name}</p>}
+          <PrimaryButton onClick={onLearn} style={{ width: "100%", background: doneToday ? C.card2 : C.vermilion, color: doneToday ? C.ink : "#fff" }}>
+            {doneToday ? <><Check size={18} color={C.matcha} /> Completed — review</> : <>Start today&apos;s lesson <ChevronRight size={18} /></>}
+          </PrimaryButton>
+        </Card>
+      )}
+
       <Card>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
           <Eyebrow>御朱印 · your stamp path</Eyebrow>
@@ -220,28 +235,16 @@ function Today({ L, day, streak, progress, saveProgress, start, onLearn }:
           <div style={{ fontSize: 14.5, lineHeight: 1.5 }}>{milestone}</div>
         </div>
       )}
-
-      {!done && week && (
-        <Card style={{ marginTop: 14 }}>
-          <Eyebrow>This week&apos;s grammar</Eyebrow>
-          <p style={{ fontFamily: "'Zen Kaku Gothic New',sans-serif", fontSize: 15.5, lineHeight: 1.7, margin: "6px 0 14px", color: C.ink }}>{week.grammar}</p>
-          <Eyebrow>Today&apos;s blocks</Eyebrow>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 8 }}>
-            {DAILY_BLOCKS.map((b) => <span key={b} style={{ fontSize: 12.5, color: C.inkSoft, background: C.card2, borderRadius: 999, padding: "5px 11px" }}>{b}</span>)}
-          </div>
-        </Card>
-      )}
-
-      <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
-        <PrimaryButton onClick={markComplete} disabled={doneToday} style={{ flex: 1 }}>{doneToday ? <><Check size={18} /> Stamped</> : "Mark today complete"}</PrimaryButton>
-        <button onClick={onLearn} style={{ ...secondaryBtn, flex: "0 0 auto" }}>Learn</button>
-      </div>
+      <VersionFooter />
     </div>
   );
 }
+function VersionFooter() {
+  return <div style={{ textAlign: "center", marginTop: 22, fontSize: 11, color: C.inkFaint, letterSpacing: 0.5 }}>Vocari v{VERSION}</div>;
+}
 
 /* ---------- LEARN (fixed lesson + practice, per day) ---------- */
-function LearnTab({ L, currentDay, start }: { L: Language; currentDay: number; start: string }) {
+function LearnTab({ L, currentDay, start, progress, onComplete }: { L: Language; currentDay: number; start: string; progress: { doneDays: number[]; studyDates: string[] }; onComplete: (d: number) => void }) {
   const maxDay = Math.max(1, Math.min(90, currentDay < 1 ? 1 : currentDay));
   const preview = currentDay < 1;
   const [viewDay, setViewDay] = useState(maxDay);
@@ -288,7 +291,7 @@ function LearnTab({ L, currentDay, start }: { L: Language; currentDay: number; s
       </div>
 
       {mode === "lesson"
-        ? <div style={{ overflowY: "auto", paddingBottom: 20 }}><LessonView lesson={lesson} week={week} ttsLang={L.ttsLang} /></div>
+        ? <div style={{ overflowY: "auto", paddingBottom: 20 }}><LessonView L={L} lesson={lesson} week={week} viewDay={viewDay} done={progress.doneDays.includes(viewDay)} onComplete={() => onComplete(viewDay)} /></div>
         : <Practice L={L} viewDay={viewDay} lesson={lesson} week={week} />}
     </div>
   );
@@ -309,7 +312,11 @@ function Row({ text, reading, meaning, ttsLang }: { text: string; reading: strin
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return <div style={{ marginBottom: 18 }}><div style={{ ...eyebrowStyle, marginBottom: 6 }}>{label}</div>{children}</div>;
 }
-function LessonView({ lesson, week, ttsLang }: { lesson?: Lesson; week?: Week; ttsLang: string }) {
+function LessonView({ L, lesson, week, viewDay, done, onComplete }: { L: Language; lesson?: Lesson; week?: Week; viewDay: number; done: boolean; onComplete: () => void }) {
+  const ttsLang = L.ttsLang;
+  const [quizOpen, setQuizOpen] = useState(false);
+  useEffect(() => { setQuizOpen(false); }, [viewDay]);
+
   if (!lesson) {
     return (
       <Card>
@@ -320,6 +327,9 @@ function LessonView({ lesson, week, ttsLang }: { lesson?: Lesson; week?: Week; t
       </Card>
     );
   }
+
+  if (quizOpen) return <Quiz L={L} viewDay={viewDay} onPass={() => { onComplete(); }} onExit={() => setQuizOpen(false)} />;
+
   return (
     <div>
       <h3 style={{ fontFamily: "'Fraunces',serif", fontWeight: 600, fontSize: 22, margin: "0 0 14px" }}>{lesson.title}</h3>
@@ -332,11 +342,18 @@ function LessonView({ lesson, week, ttsLang }: { lesson?: Lesson; week?: Week; t
       {lesson.vocab.length > 0 && <Section label={`Vocabulary · ${lesson.vocab.length}`}>{lesson.vocab.map((v, i) => <Row key={i} {...v} ttsLang={ttsLang} />)}</Section>}
       {lesson.examples.length > 0 && <Section label="Examples">{lesson.examples.map((e, i) => <Row key={i} {...e} ttsLang={ttsLang} />)}</Section>}
       {lesson.practice.length > 0 && (
-        <Section label="Your turn — say it out loud">
-          {lesson.practice.map((p, i) => <PracticeItem key={i} p={p} ttsLang={ttsLang} />)}
-        </Section>
+        <Section label="Your turn — say it out loud">{lesson.practice.map((p, i) => <PracticeItem key={i} p={p} ttsLang={ttsLang} />)}</Section>
       )}
-      {lesson.note && <div style={{ background: C.card2, borderRadius: 12, padding: "12px 14px", fontSize: 13.5, color: C.inkSoft, lineHeight: 1.5 }}>💡 {lesson.note}</div>}
+      {lesson.note && <div style={{ background: C.card2, borderRadius: 12, padding: "12px 14px", fontSize: 13.5, color: C.inkSoft, lineHeight: 1.5, marginBottom: 16 }}>💡 {lesson.note}</div>}
+
+      {/* complete via quiz */}
+      <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 16, marginTop: 4 }}>
+        {done && <div style={{ display: "flex", alignItems: "center", gap: 6, color: C.matcha, fontWeight: 700, fontSize: 14, marginBottom: 10 }}><Check size={17} /> Day complete</div>}
+        <PrimaryButton onClick={() => setQuizOpen(true)} style={{ width: "100%", background: done ? C.card : C.vermilion, color: done ? C.indigo : "#fff", border: done ? `1px solid ${C.line}` : "none" }}>
+          {done ? "Retake quiz" : "Take the quiz to complete this day"}
+        </PrimaryButton>
+        {!done && <p style={{ fontSize: 12, color: C.inkFaint, textAlign: "center", marginTop: 8 }}>Pass the quiz (80%) to stamp the day.</p>}
+      </div>
     </div>
   );
 }
@@ -356,6 +373,108 @@ function PracticeItem({ p, ttsLang }: { p: { prompt: string; answer: string; rea
       ) : (
         <button onClick={() => setShow(true)} style={{ ...secondaryBtn, padding: "6px 12px", fontSize: 12.5 }}>Show answer</button>
       )}
+    </div>
+  );
+}
+
+/* ---------- QUIZ (deterministic; built from cumulative vocab) ---------- */
+type QOption = { label: string; correct: boolean };
+type Question = { prompt: string; sub?: string; ask: string; options: QOption[] };
+function shuffle<T>(a: T[]): T[] { const b = [...a]; for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; }
+function buildQuiz(L: Language, viewDay: number): Question[] {
+  const seen: Record<string, { text: string; reading: string; meaning: string }> = {};
+  L.lessons.filter((l) => l.day <= viewDay).forEach((l) => l.vocab.forEach((v) => { seen[v.text] = v; }));
+  const pool = Object.values(seen);
+  const own = (L.lessons.find((l) => l.day === viewDay)?.vocab) || [];
+  const ownUniq = own.filter((v, i, arr) => arr.findIndex((x) => x.text === v.text) === i);
+  let targets = shuffle(ownUniq).slice(0, 5);
+  if (targets.length < 5) targets = targets.concat(shuffle(pool.filter((p) => !targets.some((t) => t.text === p.text))).slice(0, 5 - targets.length));
+  if (pool.length < 4) return []; // not enough to build 4-option questions
+  return targets.map((t, i) => {
+    const distract = shuffle(pool.filter((p) => p.text !== t.text)).slice(0, 3);
+    if (i % 2 === 0) {
+      const opts = shuffle([t, ...distract]).map((v) => ({ label: v.meaning, correct: v.text === t.text }));
+      return { prompt: t.text, sub: t.reading, ask: "What does this mean?", options: opts };
+    }
+    const opts = shuffle([t, ...distract]).map((v) => ({ label: v.text, correct: v.text === t.text }));
+    return { prompt: t.meaning, ask: "How do you say this?", options: opts };
+  });
+}
+function Quiz({ L, viewDay, onPass, onExit }: { L: Language; viewDay: number; onPass: () => void; onExit: () => void }) {
+  const [qs, setQs] = useState<Question[]>(() => buildQuiz(L, viewDay));
+  const [idx, setIdx] = useState(0);
+  const [picked, setPicked] = useState<number | null>(null);
+  const [score, setScore] = useState(0);
+  const [finished, setFinished] = useState(false);
+  const need = Math.ceil(qs.length * 0.8);
+  const passed = score >= need;
+
+  function pick(i: number) {
+    if (picked !== null) return;
+    setPicked(i);
+    if (qs[idx].options[i].correct) setScore((s) => s + 1);
+  }
+  function next() {
+    if (idx + 1 >= qs.length) { setFinished(true); }
+    else { setIdx((n) => n + 1); setPicked(null); }
+  }
+  function retry() { setQs(buildQuiz(L, viewDay)); setIdx(0); setPicked(null); setScore(0); setFinished(false); }
+
+  useEffect(() => { if (finished && passed) onPass(); /* eslint-disable-next-line */ }, [finished]);
+
+  if (qs.length === 0) {
+    return <Card style={{ textAlign: "center" }}><p style={{ color: C.inkSoft }}>Not enough vocabulary yet to build a quiz for this day.</p><button onClick={onExit} style={{ ...secondaryBtn, marginTop: 12 }}>Back to lesson</button></Card>;
+  }
+
+  if (finished) {
+    return (
+      <Card style={{ textAlign: "center", padding: "34px 22px" }}>
+        <div style={{ fontFamily: "'Fraunces',serif", fontSize: 40, color: passed ? C.matcha : C.vermilion, fontWeight: 600 }}>{score}/{qs.length}</div>
+        <h3 style={{ fontFamily: "'Fraunces',serif", fontSize: 22, margin: "8px 0 6px" }}>{passed ? "Day complete! 🎌" : "Almost there"}</h3>
+        <p style={{ color: C.inkSoft, lineHeight: 1.5, marginBottom: 18 }}>{passed ? "Nice work — the day is stamped on your path. Keep the streak alive." : `You need ${need}/${qs.length} to pass. Review the lesson and try again.`}</p>
+        <div style={{ display: "flex", gap: 10 }}>
+          <PrimaryButton onClick={retry} style={{ flex: 1, background: C.indigo }}>Try again</PrimaryButton>
+          <button onClick={onExit} style={{ ...secondaryBtn, flex: 1 }}>Back to lesson</button>
+        </div>
+      </Card>
+    );
+  }
+
+  const q = qs[idx];
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <button onClick={onExit} style={{ ...secondaryBtn, padding: "6px 12px" }}>Exit</button>
+        <span style={{ fontSize: 13, color: C.inkFaint, fontWeight: 600 }}>Question {idx + 1} / {qs.length}</span>
+      </div>
+      <div style={{ height: 6, background: C.card2, borderRadius: 999, overflow: "hidden", marginBottom: 20 }}>
+        <div style={{ height: "100%", width: `${(idx / qs.length) * 100}%`, background: C.vermilion, transition: "width .3s" }} />
+      </div>
+
+      <Card style={{ textAlign: "center", marginBottom: 16 }}>
+        <div style={{ ...eyebrowStyle, marginBottom: 8 }}>{q.ask}</div>
+        <div style={{ fontFamily: "'Zen Kaku Gothic New',sans-serif", fontSize: 34, color: C.ink, lineHeight: 1.2 }}>{q.prompt}</div>
+        {q.sub && <div style={{ fontSize: 14, color: C.inkFaint, marginTop: 4 }}>{q.sub}</div>}
+      </Card>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {q.options.map((o, i) => {
+          const isPicked = picked === i;
+          const reveal = picked !== null;
+          const bg = reveal && o.correct ? "#E7EFE4" : isPicked ? "#F3E1DC" : C.card;
+          const bd = reveal && o.correct ? C.matcha : isPicked ? C.vermilion : C.line;
+          return (
+            <button key={i} onClick={() => pick(i)} disabled={reveal}
+              style={{ textAlign: "left", background: bg, border: `1.5px solid ${bd}`, borderRadius: 12, padding: "14px 16px", cursor: reveal ? "default" : "pointer", fontFamily: "'Zen Kaku Gothic New',sans-serif", fontSize: 16, color: C.ink, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+              <span>{o.label}</span>
+              {reveal && o.correct && <Check size={18} color={C.matcha} />}
+              {reveal && isPicked && !o.correct && <X size={18} color={C.vermilion} />}
+            </button>
+          );
+        })}
+      </div>
+
+      {picked !== null && <PrimaryButton onClick={next} style={{ width: "100%", marginTop: 16 }}>{idx + 1 >= qs.length ? "See result" : "Next"} <ChevronRight size={18} /></PrimaryButton>}
     </div>
   );
 }
