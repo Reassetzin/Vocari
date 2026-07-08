@@ -86,7 +86,7 @@ const JA_LESSONS: Lesson[] = [
   },
   {
     day: 2,
-    title: "AはBです — saying what something is",
+    title: "AはBです: saying what something is",
     grammar: { name: "AはBです", explain: "は (written 'ha', said 'wa') marks the topic. です means is/am/are. Together: わたしは がくせいです = I am a student." },
     vocab: [
       { text: "わたし", reading: "watashi", meaning: "I, me" },
@@ -108,7 +108,7 @@ const JA_LESSONS: Lesson[] = [
   },
   {
     day: 3,
-    title: "これ・それ・あれ — this & that",
+    title: "これ・それ・あれ: this & that",
     grammar: { name: "これ / それ / あれ", explain: "これ = near me, それ = near you, あれ = far from both. Use with です to point things out: これは ほんです = This is a book." },
     vocab: [
       { text: "これ", reading: "kore", meaning: "this (near me)" },
@@ -150,7 +150,7 @@ const JA_LESSONS: Lesson[] = [
   },
   {
     day: 5,
-    title: "Saying 'is not' — じゃ ありません",
+    title: "Saying 'is not' (じゃ ありません)",
     grammar: { name: "じゃ ありません", explain: "To say something is NOT something, replace です with じゃ ありません (polite) or では ありません (formal): わたしは いしゃじゃ ありません = I am not a doctor." },
     vocab: [
       { text: "じゃありません", reading: "ja arimasen", meaning: "is not (polite)" },
@@ -189,7 +189,7 @@ const JA_LESSONS: Lesson[] = [
   },
   {
     day: 7,
-    title: "Week 1 review — your self-introduction",
+    title: "Week 1 review: your self-introduction",
     grammar: { name: "Put Week 1 together", explain: "You can now greet, say who you are, point things out, ask yes/no questions, negate, and link nouns. Today, combine them into a real self-introduction." },
     vocab: [
       { text: "どうぞよろしく", reading: "dōzo yoroshiku", meaning: "Pleased to meet you" },
@@ -271,7 +271,7 @@ const JA_LESSONS: Lesson[] = [
   },
   {
     day: 11,
-    title: "も — 'also / too'",
+    title: "も: 'also / too'",
     grammar: { name: "も (also)", explain: "Replace は with も to mean 'also'. わたしも がくせいです = I'm a student too. も says the same thing is true for another item." },
     vocab: [
       { text: "も", reading: "mo", meaning: "also, too" },
@@ -308,7 +308,7 @@ const JA_LESSONS: Lesson[] = [
   },
   {
     day: 13,
-    title: "Inviting someone — 〜ませんか",
+    title: "Inviting someone (〜ませんか)",
     grammar: { name: "〜ませんか (shall we?)", explain: "A gentle invitation. Take a verb + ませんか: いきませんか = shall we go? のみませんか = shall we have a drink?" },
     vocab: [
       { text: "いきます", reading: "ikimasu", meaning: "to go" },
@@ -327,7 +327,7 @@ const JA_LESSONS: Lesson[] = [
   },
   {
     day: 14,
-    title: "Week 2 review — making plans",
+    title: "Week 2 review: making plans",
     grammar: { name: "Put Week 2 together", explain: "You can count, tell time, ask prices, say 'also', read katakana, and invite someone. Combine them in a short everyday exchange." },
     vocab: [
       { text: "どうですか", reading: "dō desu ka", meaning: "how about it? / how is it?" },
