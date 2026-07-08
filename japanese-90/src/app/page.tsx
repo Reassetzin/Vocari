@@ -12,7 +12,7 @@ const C = {
   vermilion: "#CB3A22", vermilionSoft: "#E0644E", matcha: "#6E7F5B", line: "#D9D3C4",
 };
 
-const VERSION = "0.6.0";
+const VERSION = "0.6.1";
 const MILESTONES: Record<number, string> = {
   1: "Record a 30-second voice memo today — your Day 1 baseline.",
   30: "Record a 90-second self-intro, no script. Compare to Day 1.",
@@ -380,6 +380,8 @@ function LessonView({ L, lesson, week, viewDay, done, onComplete, wordStats, onA
   const [quizOpen, setQuizOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewed, setReviewedState] = useState(false);
+  const [voiceOK, setVoiceOK] = useState(false);
+  useEffect(() => { setVoiceOK(voiceSupported); }, []);
   useEffect(() => { setQuizOpen(false); setReviewOpen(false); setReviewedState(load(reviewKey, false)); /* eslint-disable-next-line */ }, [viewDay, L.code]);
   function setReviewed(v: boolean) { setReviewedState(v); save(reviewKey, v); }
 
@@ -426,7 +428,14 @@ function LessonView({ L, lesson, week, viewDay, done, onComplete, wordStats, onA
       {lesson.vocab.length > 0 && <Section label={`Vocabulary · ${lesson.vocab.length}`}>{lesson.vocab.map((v, i) => <Row key={i} {...v} ttsLang={ttsLang} />)}</Section>}
       {lesson.examples.length > 0 && <Section label="Examples">{lesson.examples.map((e, i) => <Row key={i} {...e} ttsLang={ttsLang} />)}</Section>}
       {lesson.practice.length > 0 && (
-        <Section label="Your turn — say it out loud">{lesson.practice.map((p, i) => <PracticeItem key={i} p={p} ttsLang={ttsLang} />)}</Section>
+        <Section label="Your turn — say it out loud">
+          {lesson.practice.map((p, i) => <PracticeItem key={i} p={p} ttsLang={ttsLang} voiceOK={voiceOK} />)}
+          {!voiceOK && (
+            <p style={{ fontSize: 12, color: C.inkFaint, marginTop: 8, lineHeight: 1.5 }}>
+              🎤 The &quot;Say it&quot; voice check needs Chrome or an Android browser — this browser (or the installed app on iPhone) doesn&apos;t support it. Say the answers aloud anyway and use 🔊 to compare.
+            </p>
+          )}
+        </Section>
       )}
       {lesson.note && <div style={{ background: C.card2, borderRadius: 12, padding: "12px 14px", fontSize: 13.5, color: C.inkSoft, lineHeight: 1.5, marginBottom: 16 }}>💡 {lesson.note}</div>}
 
@@ -441,7 +450,7 @@ function LessonView({ L, lesson, week, viewDay, done, onComplete, wordStats, onA
     </div>
   );
 }
-function PracticeItem({ p, ttsLang }: { p: { prompt: string; answer: string; reading: string }; ttsLang: string }) {
+function PracticeItem({ p, ttsLang, voiceOK }: { p: { prompt: string; answer: string; reading: string }; ttsLang: string; voiceOK: boolean }) {
   const [show, setShow] = useState(false);
   const [listening, setListening] = useState(false);
   const [heard, setHeard] = useState<null | { text: string; match: boolean }>(null);
@@ -484,7 +493,7 @@ function PracticeItem({ p, ttsLang }: { p: { prompt: string; answer: string; rea
         ) : (
           <button onClick={() => setShow(true)} style={{ ...secondaryBtn, padding: "6px 12px", fontSize: 12.5 }} className="jp-tap">Show answer</button>
         )}
-        {voiceSupported && hasAnswerJP && (
+        {voiceOK && hasAnswerJP && (
           <button onClick={listen} className="jp-tap" aria-label="Speak your answer"
             style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", fontSize: 12.5, fontWeight: 600, borderRadius: 12, cursor: "pointer", border: `1px solid ${listening ? C.vermilion : C.line}`, background: listening ? "#F3E1DC" : C.card, color: listening ? C.vermilion : C.indigo }}>
             <Mic size={15} /> {listening ? "Listening…" : "Say it"}
