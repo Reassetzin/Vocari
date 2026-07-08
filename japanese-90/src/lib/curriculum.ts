@@ -24,6 +24,7 @@ export type Language = {
   ttsLang: string;     // BCP-47 tag for speech, e.g. 'ja-JP'
   hasScript: boolean;  // true when there's a writing-system trainer (kana)
   kana: Kana[] | null;
+  katakana: Kana[] | null;
   weeks: Week[];
   lessons: Lesson[];
   ready: boolean;      // false => "coming soon"
@@ -42,6 +43,21 @@ const HIRAGANA: Kana[] = [
   ["ら","ra"],["り","ri"],["る","ru"],["れ","re"],["ろ","ro"],
   ["わ","wa"],["を","wo"],["ん","n"],
 ].map(([k, r]) => ({ k, r }));
+
+/* ---------- Japanese: katakana ---------- */
+const KATAKANA: Kana[] = [
+  ["ア","a"],["イ","i"],["ウ","u"],["エ","e"],["オ","o"],
+  ["カ","ka"],["キ","ki"],["ク","ku"],["ケ","ke"],["コ","ko"],
+  ["サ","sa"],["シ","shi"],["ス","su"],["セ","se"],["ソ","so"],
+  ["タ","ta"],["チ","chi"],["ツ","tsu"],["テ","te"],["ト","to"],
+  ["ナ","na"],["ニ","ni"],["ヌ","nu"],["ネ","ne"],["ノ","no"],
+  ["ハ","ha"],["ヒ","hi"],["フ","fu"],["ヘ","he"],["ホ","ho"],
+  ["マ","ma"],["ミ","mi"],["ム","mu"],["メ","me"],["モ","mo"],
+  ["ヤ","ya"],["ユ","yu"],["ヨ","yo"],
+  ["ラ","ra"],["リ","ri"],["ル","ru"],["レ","re"],["ロ","ro"],
+  ["ワ","wa"],["ヲ","wo"],["ン","n"],
+].map(([k, r]) => ({ k, r }));
+
 
 /* ---------- Japanese: 13-week meta ---------- */
 const JA_WEEKS: Week[] = [
@@ -1750,15 +1766,15 @@ const JA_LESSONS: Lesson[] = [
 export const LANGUAGES: Record<string, Language> = {
   ja: {
     code: "ja", name: "Japanese", nativeName: "日本語", ttsLang: "ja-JP",
-    hasScript: true, kana: HIRAGANA, weeks: JA_WEEKS, lessons: JA_LESSONS, ready: true,
+    hasScript: true, kana: HIRAGANA, katakana: KATAKANA, weeks: JA_WEEKS, lessons: JA_LESSONS, ready: true,
   },
   es: {
     code: "es", name: "Spanish", nativeName: "Español", ttsLang: "es-ES",
-    hasScript: false, kana: null, weeks: [], lessons: [], ready: false,
+    hasScript: false, kana: null, katakana: null, weeks: [], lessons: [], ready: false,
   },
   ko: {
     code: "ko", name: "Korean", nativeName: "한국어", ttsLang: "ko-KR",
-    hasScript: false, kana: null, weeks: [], lessons: [], ready: false,
+    hasScript: false, kana: null, katakana: null, weeks: [], lessons: [], ready: false,
   },
 };
 
